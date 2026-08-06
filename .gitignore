@@ -1,1 +1,7 @@
-/dump-copy-1-eurekaEmprende-202602170822.sql
+# El respaldo de la base de datos SI se versiona: es necesario para
+# levantar el proyecto (ver README.md, paso 4).
+
+# Archivos del sistema operativo
+Thumbs.db
+Desktop.ini
+.DS_Store

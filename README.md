@@ -45,10 +45,12 @@ cd ing-software-eurekaEmprende
 
 | Herramienta | Versión | Necesaria para |
 |---|---|---|
-| **Docker Desktop** | 4.x o superior | Ruta recomendada |
-| **JDK** | **21** (obligatorio) | Compilar el backend sin Docker |
-| **PostgreSQL client** | 17 | El comando `pg_restore` |
+| **Docker Desktop** | 4.x o superior | Backend y base de datos |
 | **Node.js** | 18.19+ o 20.11+ | Frontend (Angular 17) |
+| JDK | 21 | Solo si levantas el backend sin Docker |
+| PostgreSQL client | 17 | Solo si levantas la base sin Docker |
+
+Con Docker **no necesitas instalar Java ni PostgreSQL**: ambos corren dentro de contenedores.
 
 El backend **no compila con JDK 17 ni con JDK 24**. Verifica con `java -version`.
 
@@ -75,26 +77,35 @@ Sin `GPT_KEY` la aplicación arranca, pero la generación de roadmaps falla.
 
 ---
 
-## 4. Restaurar la base de datos — **paso obligatorio**
-
-El proyecto **no crea las tablas automáticamente**: `spring.jpa.hibernate.ddl-auto` no está definido, así que Hibernate usa el valor por defecto `none`.
-
-Si te saltas este paso, **la aplicación arranca sin errores y Swagger carga bien**, pero toda operación contra la base de datos falla. Es el error de levantamiento más común.
-
-El respaldo `dump-copy-1-eurekaEmprende-202602170822.sql` está incluido en la raíz de este repositorio. Está en **formato personalizado de PostgreSQL** — se restaura con `pg_restore`, no con `psql -f`.
+## 4. Levantar el backend y la base de datos
 
 ```bash
-# 1. Levanta solo la base de datos
 cd eureka-emprende
-docker compose up -d postgres
-
-# 2. Copia el respaldo al contenedor
-docker compose cp ../dump-copy-1-eurekaEmprende-202602170822.sql postgres:/tmp/dump.sql
-
-# 3. Restaura
-docker compose exec postgres pg_restore -U postgres -d eurekaEmprende \
-  --no-owner --clean --if-exists /tmp/dump.sql
+docker compose up -d --build
 ```
+
+Eso es todo. La primera vez tarda varios minutos porque compila el backend y descarga las dependencias de Maven. La API queda en **http://localhost:8080**.
+
+Ver el progreso:
+
+```bash
+docker compose logs -f
+```
+
+### La base de datos se restaura sola
+
+El proyecto **no crea las tablas automáticamente** (`spring.jpa.hibernate.ddl-auto` no está definido, así que Hibernate usa `none`). Por eso el respaldo `dump-copy-1-eurekaEmprende-202602170822.sql` se restaura de forma automática: el script `eureka-emprende/initdb/01-restaurar-bd.sh` se ejecuta dentro del contenedor de PostgreSQL la primera vez que arranca.
+
+En los logs verás:
+
+```
+>> Restaurando la base de datos 'eurekaEmprende' desde el respaldo...
+>> Restauracion completada.
+```
+
+El backend espera a que la restauración termine antes de arrancar (`depends_on: condition: service_healthy`), así que no hay condiciones de carrera.
+
+> **Importante:** la restauración corre **solo cuando el volumen de datos está vacío**. Si ya tenías el proyecto levantado de antes, PostgreSQL conserva su volumen y el script no se ejecuta. Para forzar una restauración limpia: `docker compose down -v && docker compose up -d`.
 
 Verifica que se hayan creado las 40 tablas:
 
@@ -102,31 +113,19 @@ Verifica que se hayan creado las 40 tablas:
 docker compose exec postgres psql -U postgres -d eurekaEmprende -c "\dt"
 ```
 
-Las advertencias sobre roles inexistentes son inofensivas gracias a `--no-owner`.
-
----
-
-## 5. Levantar el backend
-
-```bash
-cd eureka-emprende
-docker compose up -d --build
-```
-
-La primera compilación descarga las dependencias de Maven y tarda varios minutos. La API queda en **http://localhost:8080**.
-
-Ver los logs de arranque:
-
-```bash
-docker compose logs -f backend
-```
-
 <details>
 <summary>Alternativa: sin Docker</summary>
 
-Requiere PostgreSQL 17 en `localhost:5432` con la base ya restaurada. Credenciales por defecto: `postgres` / `postgres`.
+Requiere JDK 21 y PostgreSQL 17 instalados en el equipo. Credenciales por defecto: `postgres` / `postgres`.
 
 ```bash
+# 1. Crear y restaurar la base (el respaldo esta en formato personalizado:
+#    se usa pg_restore, NO psql -f)
+createdb -U postgres eurekaEmprende
+pg_restore -U postgres -d eurekaEmprende --no-owner --no-privileges \
+  ../dump-copy-1-eurekaEmprende-202602170822.sql
+
+# 2. Arrancar el backend
 ./mvnw spring-boot:run        # Linux / macOS
 .\mvnw.cmd spring-boot:run    # Windows
 ```
@@ -134,7 +133,7 @@ Requiere PostgreSQL 17 en `localhost:5432` con la base ya restaurada. Credencial
 
 ---
 
-## 6. Levantar el frontend
+## 5. Levantar el frontend
 
 ```bash
 cd ConectaEmprende
@@ -148,7 +147,7 @@ Queda en **http://localhost:4200** y consume la API en `http://localhost:8080`, 
 
 ---
 
-## 7. Verificar que todo funciona
+## 6. Verificar que todo funciona
 
 | Comprobación | URL | Resultado esperado |
 |---|---|---|
@@ -161,22 +160,24 @@ Si las tres primeras responden pero el frontend muestra listas vacías, el probl
 
 ---
 
-## 8. Problemas frecuentes
+## 7. Problemas frecuentes
 
 | Síntoma | Causa | Solución |
 |---|---|---|
 | Las carpetas de los submódulos están vacías | Clonaste sin `--recurse-submodules` | `git submodule update --init --recursive` |
 | `Filename too long` al clonar | Límite de rutas de Windows | `git config --global core.longpaths true` |
-| La API responde pero todo sale vacío o da error 500 | La base de datos no se restauró | Ejecuta el paso 4 |
+| La API responde pero todo sale vacío o da error 500 | La base no se restauró: el volumen ya existía | `docker compose down -v && docker compose up -d` |
+| En los logs no aparece "Restaurando la base de datos" | El volumen ya tenía datos, el script no corre | `docker compose down -v && docker compose up -d` |
+| `01-restaurar-bd.sh: bad interpreter` | El script quedó con finales de línea CRLF | Verifica que `.gitattributes` tenga `*.sh text eol=lf` y vuelve a clonar |
 | `port 5432 already allocated` | PostgreSQL nativo ocupando el puerto | `services.msc` → `postgresql-x64-XX` → Detener |
-| `input file appears to be a text format dump` | Usaste `psql` en vez de `pg_restore` | Usa `pg_restore` (paso 4) |
+| `input file appears to be a text format dump` | Usaste `psql` en vez de `pg_restore` (ruta sin Docker) | Usa `pg_restore` |
 | El backend no compila | JDK distinto de 21 | Instala JDK 21 y ajusta `JAVA_HOME` |
 | La generación de roadmap falla | Falta `GPT_KEY` | Revisa el `.env` |
 | Los cambios del `.env` no se aplican | Compose cachea el entorno | `docker compose up -d --force-recreate backend` |
 
 ---
 
-## 9. Detener el entorno
+## 8. Detener el entorno
 
 ```bash
 docker compose down       # detiene los contenedores, conserva los datos

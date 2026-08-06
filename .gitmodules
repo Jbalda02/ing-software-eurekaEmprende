@@ -1,0 +1,6 @@
+[submodule "eureka-emprende"]
+	path = eureka-emprende
+	url = https://github.com/Jbalda02/eureka-emprende.git
+[submodule "ConectaEmprende"]
+	path = ConectaEmprende
+	url = https://github.com/AllissonGualpa/ConectaEmprende.git
